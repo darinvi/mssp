@@ -5,7 +5,7 @@ name = "pypi"
 
 [packages]
 numpy = "*"
-torch = "*"
+scikit-learn = "*"
 
 [dev-packages]
 ipykernel = "*"
