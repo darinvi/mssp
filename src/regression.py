@@ -30,6 +30,9 @@ def _ensure_y(func):
 
 
 class LinearRegression:
+    def __init__(self):
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     @_ensure_y
     @_ensure_x
     def fit(self, X, y):
@@ -50,7 +53,7 @@ class LinearRegression:
     
     @_ensure_x
     def predict(self, X):
-        return self.intercept_ + X @ self.coef_
+        return self.intercept_ + X.to(self.device) @ self.coef_.to(self.device)
 
     def fit_predict(self, X, y):
         self.fit(X, y)
@@ -73,23 +76,44 @@ class PairwiseLinearRegression:
 
         self.memory_threshold = memory_threshold
 
-    @staticmethod
-    def _incremental_gram_matrix(X, y):
-        G = X.T @ X
-        g = X.T @ y
-        sx = X.sum(dim=0)
-        sy = y.sum()
-        return G, g, sx, sy
+    def _calculate_batch_size(self, element_size, dim):
+        if self.device.type == "cpu":
+            free = psutil.virtual_memory().available 
+        else:
+            free, _ = torch.cuda.mem_get_info()
+        max_bytes = free * self.memory_threshold
+        return max(1, int(max_bytes // (3 * dim * element_size)))
 
+    def _incremental_gram_matrix(self, X, y):
+        n, p = X.shape
+
+        G = torch.zeros((p, p), dtype=torch.float, device=self.device)
+        g = torch.zeros((p,), dtype=torch.float, device=self.device)
+        sx = torch.zeros((p,), dtype=torch.float, device=self.device)
+        sy = torch.zeros((1,), dtype=torch.float, device=self.device)
+
+        start = 0
+        element_size = X.element_size()
+        while start < n:
+            batch_size = self._calculate_batch_size(element_size=element_size, dim=p) # TODO make sure formula is correct
+            Xb = X[start:start + batch_size].cuda(self.device, non_blocking=True)
+            yb = y[start:start + batch_size].cuda(self.device, non_blocking=True)
+
+            G += Xb.T @ Xb
+            g += Xb.T @ yb
+            sx += Xb.sum(0)
+            sy += yb.sum()
+
+            torch.cuda.empty_cache()
+
+            start += batch_size
+
+        return G, g, sx, sy
+        
     @_ensure_y
     @_ensure_x
     def fit(self, X, y):
-        X = X.to(self.device)
-        y = y.to(self.device)
-
         n, p = X.shape
-        
-        G, g, sx, sy = PairwiseLinearRegression._incremental_gram_matrix(X, y)
 
         pairs = torch.tensor(list(combinations(range(p), 2)), device=X.device)
 
@@ -97,7 +121,9 @@ class PairwiseLinearRegression:
         j = pairs[:, 1]
         C = len(pairs)
 
-        A = torch.zeros((C, 3, 3), dtype=torch.float, device=X.device)
+        G, g, sx, sy = self._incremental_gram_matrix(X, y)
+
+        A = torch.zeros((C, 3, 3), dtype=torch.float, device=self.device)
         A[:, 0, 0] = n
         A[:, 0, 1] = sx[i]
         A[:, 0, 2] = sx[j]
@@ -110,7 +136,7 @@ class PairwiseLinearRegression:
         A[:, 2, 1] = G[j, i]
         A[:, 2, 2] = G[j, j]
 
-        b = torch.zeros((C, 3), dtype=torch.float, device=X.device)
+        b = torch.zeros((C, 3), dtype=torch.float, device=self.device)
         b[:, 0] = sy
         b[:, 1] = g[i]
         b[:, 2] = g[j]
@@ -125,59 +151,49 @@ class PairwiseLinearRegression:
 
         return self
 
-    def _calculate_batch_size(self, element_size):
-        if self.device.type == "cpu":
-            free = psutil.virtual_memory().available 
-        else:
-            free, _ = torch.cuda.mem_get_info()
-        max_bytes = free * self.memory_threshold
-        return max(1, int(max_bytes // (3 * self.C * element_size)))
-
     @_ensure_x
-    def predict(self, X):
-        with torch.no_grad():
-            preds = torch.empty((X.shape[0], self.C), dtype=X.dtype)
-            element_size = X.element_size()
-            start = 0
-            while start < X.shape[0]:
-                Xb = X[
-                    start:
-                    start + (batch_size := self._calculate_batch_size(element_size))
-                ].to(self.device)
+    def predict(self, X, mask=None):
+        preds = torch.empty((X.shape[0], self.C), dtype=X.dtype)
+        element_size = X.element_size()
+        start = 0
+        
+        while start < X.shape[0]:
+            Xb = X[
+                start:
+                start + (batch_size := self._calculate_batch_size(element_size=element_size, dim=self.C))
+            ].to(self.device)
 
-                out = (
-                    self.intercept_[None, :] +
-                    Xb[:, self.i] * self.coef_[:, 0] + 
-                    Xb[:, self.j] * self.coef_[:, 1]
-                )
+            out = (
+                self.intercept_[None, :] +
+                Xb[:, self.i] * self.coef_[:, 0] + 
+                Xb[:, self.j] * self.coef_[:, 1]
+            )
 
-                preds[start:start + batch_size] = out.cpu()
-                start += batch_size
-                
-                del Xb, out
-                torch.cuda.empty_cache()
+            preds[start:start + batch_size] = out.cpu()
+            start += batch_size
+            
+            del Xb, out
+            torch.cuda.empty_cache()
 
-            print(preds.shape, X.shape)
-            return preds
+        return preds
 
     @_ensure_y
     @_ensure_x
-    def evaluate(self, X, y, metrics=["rmse"]):
+    def evaluate(self, X, y, metrics=["rmse"], return_mask=False):
         res = {}
-        with torch.no_grad():
-            y_pred = self.predict(X)
-            for metric in metrics:
-                if metric == "rmse":
-                    res[metric] = torch.sqrt(((y_pred - y[:, None])**2).mean(dim=0))
-                elif metric == "mae":
-                    res[metric] = (y_pred - y[:, None]).abs().mean(dim=0)
-                elif metric == "r2":
-                    y_mean = y.mean(dim=0)
-                    ss_tot = ((y - y_mean[None, :])**2).sum(dim=0)
-                    ss_res = ((y_pred - y[:, None])**2).sum(dim=0)
-                    res[metric] = 1 - ss_res / ss_tot
-                elif metric == "mape":
-                    res[metric] = ((y_pred - y[:, None]).abs() / y[:, None]).mean(dim=0)
-                else:
-                    raise ValueError(f"Invalid metric: {metric}")
+        y_pred = self.predict(X)
+        for metric in metrics:
+            if metric == "rmse":
+                res[metric] = torch.sqrt(((y_pred - y[:, None])**2).mean(dim=0))
+            elif metric == "mae":
+                res[metric] = (y_pred - y[:, None]).abs().mean(dim=0)
+            elif metric == "r2":
+                y_mean = y.mean(dim=0)
+                ss_tot = ((y - y_mean[None, :])**2).sum(dim=0)
+                ss_res = ((y_pred - y[:, None])**2).sum(dim=0)
+                res[metric] = 1 - ss_res / ss_tot
+            elif metric == "mape":
+                res[metric] = ((y_pred - y[:, None]).abs() / y[:, None]).mean(dim=0)
+            else:
+                raise ValueError(f"Invalid metric: {metric}")
         return res
