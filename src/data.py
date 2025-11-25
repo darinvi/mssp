@@ -1,4 +1,4 @@
-from src import regression as lr
+from src.ols import LinearRegression
 import torch
 
 
@@ -70,7 +70,7 @@ class Primitives:
     Y = a0 + a1*X
     '''
     def lin(self, x, y):
-        model = lr.LinearRegression()
+        model = LinearRegression()
         p = model.fit_predict(x, y)
         return p, model.coef_, model.intercept_
 
@@ -81,7 +81,7 @@ class Primitives:
     Y = a0 + a1*Z
     '''
     def lgn(self, x, y):
-        model = lr.LinearRegression()
+        model = LinearRegression()
         p = model.fit_predict(
             torch.log(x),
             y
@@ -95,7 +95,7 @@ class Primitives:
     Q = a0 + a1*X
     '''
     def xpy(self, x, y):
-        model = lr.LinearRegression()
+        model = LinearRegression()
         p = model.fit_predict(
             x, 
             torch.log(y)
@@ -108,7 +108,7 @@ class Primitives:
     ln(Y) = ln(a0) + a1*Z
     '''
     def pow(self, x, y):
-        model = lr.LinearRegression()
+        model = LinearRegression()
         p = model.fit_predict(
             torch.log(x), 
             torch.log(y)
@@ -122,7 +122,7 @@ class Primitives:
     Y = a0 + a1*Z
     '''
     def rex(self, x, y):
-        model = lr.LinearRegression()
+        model = LinearRegression()
         p = model.fit_predict(
             1/x,
             y
@@ -136,7 +136,7 @@ class Primitives:
     Q = a0 + a1*X
     '''
     def rey(self, x, y):
-        model = lr.LinearRegression()
+        model = LinearRegression()
         p = model.fit_predict(
             x, 
             1/y
@@ -150,7 +150,7 @@ class Primitives:
     Q = a0 + a1*X
     '''
     def sqr(self, x, y):
-        model = lr.LinearRegression()
+        model = LinearRegression()
         p = model.fit_predict(
             x, 
             torch.sqrt(y)
@@ -158,15 +158,57 @@ class Primitives:
         return p ** 2, model.coef_, model.intercept_
 
 
-    # '''
-    # Y = a0 + a1*sin(X)
-    # Z = sin(X)
-    # Y = a0 + a1*Z
-    # '''
-    # def snx(self, x, y):
-    #     model = lr.LinearRegression()
-    #     p = model.fit_predict(
-    #         torch.sin(x),
-    #         y
-    #     )
-    #     return p, model.coef_, model.intercept_
+    '''
+    Y = a0 + a1*sin(X)
+    Z = sin(X)
+    Y = a0 + a1*Z
+    '''
+    def snx(self, x, y):
+        model = LinearRegression()
+        p = model.fit_predict(
+            torch.sin(x),
+            y
+        )
+        return p, model.coef_, model.intercept_
+
+class DataManager:
+    def __init__(self, add_powers=None, add_synergies=None):
+        self.normalizer = Normalizer()
+        self.primitives = Primitives()
+        self.add_powers = self._validate_add_powers(add_powers)
+        self.add_synergies = add_synergies
+
+    @staticmethod
+    def _validate_add_powers(add_powers):
+        if add_powers is not None:
+            if isinstance(add_powers, int):
+                add_powers = [add_powers]
+
+            if not isinstance(add_powers, list) or not all(isinstance(x, int) for x in add_powers):
+                raise ValueError(f"Add powers must be a list of integers, received {add_powers} of type {type(add_powers)}")
+                
+        return add_powers
+
+    def _add_powers(self, X):
+        if self.add_powers is None:
+            return X
+        return torch.cat([X, *[X ** p for p in self.add_powers]], dim=1)
+
+    def _add_synergies(self, X):
+        # if not self.add_synergies:
+            # return X
+        return X
+
+    def fit(self, X, y):
+        X = self._add_synergies(X)
+        X = self._add_powers(X)
+        X = self.normalizer.fit(X)
+        X = self.primitives.transform(X, y)
+        return X
+
+    def transform(self, X, y):
+        X = self._add_synergies(X)
+        X = self._add_powers(X)
+        X = self.normalizer.transform(X)
+        X = self.primitives.transform(X, y)
+        return X

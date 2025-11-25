@@ -2,7 +2,7 @@ import torch
 from itertools import combinations
 import psutil
 
-def _ensure_x(func):
+def ensure_x(func):
     def wrapper(self, X, *args, **kwargs):
         if not isinstance(X, torch.Tensor):
             X = torch.as_tensor(X, dtype=torch.float)
@@ -13,7 +13,7 @@ def _ensure_x(func):
         return func(self, X, *args, **kwargs)
     return wrapper
 
-def _ensure_y(func):
+def ensure_y(func):
     def wrapper(self, X, y, *args, **kwargs):
         if not isinstance(y, torch.Tensor):
             y = torch.as_tensor(y, dtype=torch.float)
@@ -33,8 +33,8 @@ class LinearRegression:
     def __init__(self):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    @_ensure_y
-    @_ensure_x
+    @ensure_y
+    @ensure_x
     def fit(self, X, y):
         X_aug = torch.cat(
             [
@@ -51,7 +51,7 @@ class LinearRegression:
         return self
 
     
-    @_ensure_x
+    @ensure_x
     def predict(self, X):
         return self.intercept_ + X.to(self.device) @ self.coef_.to(self.device)
 
@@ -110,8 +110,8 @@ class PairwiseLinearRegression:
 
         return G, g, sx, sy
         
-    @_ensure_y
-    @_ensure_x
+    @ensure_y
+    @ensure_x
     def fit(self, X, y):
         n, p = X.shape
 
@@ -151,12 +151,12 @@ class PairwiseLinearRegression:
 
         return self
 
-    @_ensure_x
-    def predict(self, X, mask=None):
+    @ensure_x
+    def predict(self, X):
         preds = torch.empty((X.shape[0], self.C), dtype=X.dtype)
         element_size = X.element_size()
-        start = 0
         
+        start = 0
         while start < X.shape[0]:
             Xb = X[
                 start:
@@ -172,28 +172,45 @@ class PairwiseLinearRegression:
             preds[start:start + batch_size] = out.cpu()
             start += batch_size
             
-            del Xb, out
             torch.cuda.empty_cache()
 
         return preds
 
-    @_ensure_y
-    @_ensure_x
-    def evaluate(self, X, y, metrics=["rmse"], return_mask=False):
+    @ensure_y
+    @ensure_x
+    def evaluate(self, X, y, metrics=["rmse"], return_preds=False):
         res = {}
         y_pred = self.predict(X)
         for metric in metrics:
             if metric == "rmse":
-                res[metric] = torch.sqrt(((y_pred - y[:, None])**2).mean(dim=0))
+                scores = torch.sqrt(((y_pred - y[:, None])**2).mean(dim=0))
             elif metric == "mae":
-                res[metric] = (y_pred - y[:, None]).abs().mean(dim=0)
+                scores = (y_pred - y[:, None]).abs().mean(dim=0)
             elif metric == "r2":
                 y_mean = y.mean(dim=0)
                 ss_tot = ((y - y_mean[None, :])**2).sum(dim=0)
                 ss_res = ((y_pred - y[:, None])**2).sum(dim=0)
-                res[metric] = 1 - ss_res / ss_tot
+                scores = 1 - ss_res / ss_tot
             elif metric == "mape":
-                res[metric] = ((y_pred - y[:, None]).abs() / y[:, None]).mean(dim=0)
+                scores = ((y_pred - y[:, None]).abs() / y[:, None]).mean(dim=0)
+            elif metric == "accuracy":
+                scores = (y_pred.round() == y[:, None]).mean(dim=0)
+            elif metric == "precision":
+                scores = (y_pred.round() == y[:, None]).sum(dim=0) / (y_pred.round() == y[:, None]).sum(dim=0)
+            elif metric == "recall":
+                scores = (y_pred.round() == y[:, None]).sum(dim=0) / (y[:, None] == y[:, None]).sum(dim=0)
+            elif metric == "f1":
+                precision = (y_pred.round() == y[:, None]).sum(dim=0) / (y_pred.round() == y[:, None]).sum(dim=0)
+                recall = (y_pred.round() == y[:, None]).sum(dim=0) / (y[:, None] == y[:, None]).sum(dim=0)
+                scores = 2 * (precision * recall) / (precision + recall)
             else:
                 raise ValueError(f"Invalid metric: {metric}")
+
+            res[metric] = scores
+            
+        if return_preds:
+            return res, y_pred
+
         return res
+
+
