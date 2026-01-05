@@ -61,9 +61,10 @@ class LinearRegression:
 
 
 class PairwiseLinearRegression:
-    def __init__(self, memory_threshold=0.75):
+    def __init__(self, metrics, memory_threshold=0.75):
         self._validate_memory_threshold(memory_threshold)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.metrics = metrics if isinstance(metrics, list) else [metrics]
 
     def _validate_memory_threshold(self, memory_threshold):
         memory_threshold = memory_threshold or 0.75
@@ -141,7 +142,13 @@ class PairwiseLinearRegression:
         b[:, 1] = g[i]
         b[:, 2] = g[j]
 
-        betas, *_ = torch.linalg.lstsq(A, b)
+        try:
+            betas, *_ = torch.linalg.lstsq(A, b)
+        except:
+            print('WARNING: Singular matrix, adding small perturbation')
+            I = torch.eye(3, device=A.device).unsqueeze(0).expand(A.shape[0], 3, 3)
+            eps = 1e-6 * A.abs().mean(dim=(1,2), keepdim=True)
+            betas, *_ = torch.linalg.lstsq(A + eps * I, b)
 
         self.coef_ = betas[:, [1, 2]].float()
         self.intercept_ = betas[:, 0].float()
@@ -178,12 +185,20 @@ class PairwiseLinearRegression:
 
     @ensure_y
     @ensure_x
-    def evaluate(self, X, y, metrics=["rmse"], return_preds=False):
+    def evaluate(self, X, y, metrics=None, return_preds=False, pow_cross=False):
+        if metrics is None:
+            metrics = self.metrics
         res = {}
         y_pred = self.predict(X)
+
+        if pow_cross:
+            y_pred = torch.exp(y_pred)
+        
         for metric in metrics:
             if metric == "rmse":
                 scores = torch.sqrt(((y_pred - y[:, None])**2).mean(dim=0))
+            elif metric == "mse":
+                scores = ((y_pred - y[:, None])**2).mean(dim=0)
             elif metric == "mae":
                 scores = (y_pred - y[:, None]).abs().mean(dim=0)
             elif metric == "r2":

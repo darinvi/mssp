@@ -31,7 +31,7 @@ class Primitives:
             self.rex,
             self.rey,
             self.sqr,
-            # self.snx,
+            self.snx,
         ]
 
 
@@ -172,43 +172,20 @@ class Primitives:
         return p, model.coef_, model.intercept_
 
 class DataManager:
-    def __init__(self, add_powers=None, add_synergies=None):
+    def __init__(self):
         self.normalizer = Normalizer()
         self.primitives = Primitives()
-        self.add_powers = self._validate_add_powers(add_powers)
-        self.add_synergies = add_synergies
-
-    @staticmethod
-    def _validate_add_powers(add_powers):
-        if add_powers is not None:
-            if isinstance(add_powers, int):
-                add_powers = [add_powers]
-
-            if not isinstance(add_powers, list) or not all(isinstance(x, int) for x in add_powers):
-                raise ValueError(f"Add powers must be a list of integers, received {add_powers} of type {type(add_powers)}")
-                
-        return add_powers
-
-    def _add_powers(self, X):
-        if self.add_powers is None:
-            return X
-        return torch.cat([X, *[X ** p for p in self.add_powers]], dim=1)
-
-    def _add_synergies(self, X):
-        # if not self.add_synergies:
-            # return X
-        return X
 
     def fit(self, X, y):
-        X = self._add_synergies(X)
-        X = self._add_powers(X)
         X = self.normalizer.fit(X)
         X = self.primitives.transform(X, y)
+        if X.isnan().any():
+            raise Exception("NaNs in X")
         return X
 
     def transform(self, X, y):
-        X = self._add_synergies(X)
-        X = self._add_powers(X)
         X = self.normalizer.transform(X)
         X = self.primitives.transform(X, y)
+        if X.isnan().any():
+            raise Exception("NaNs in X")
         return X
