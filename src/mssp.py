@@ -172,6 +172,7 @@ class MSSP:
 
         best_loss, patience_counter = float('inf'), 0
         for ep in range(self.epochs):
+            print(X.shape)
             st = time.time()
 
             '''

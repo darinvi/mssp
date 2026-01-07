@@ -172,7 +172,7 @@ class Primitives:
         return p, model.coef_, model.intercept_
 
 class DataManager:
-    def __init__(self):
+    def __init__(self, return_params=False):
         self.normalizer = Normalizer()
         self.primitives = Primitives()
 
