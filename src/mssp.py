@@ -1,6 +1,6 @@
 from src.data import DataManager
 from src.ols import PairwiseLinearRegression, ensure_x, ensure_y
-from src.tree import Node
+from src.tree import ModelTree
 import torch
 import time
 
@@ -14,7 +14,7 @@ class MSSP:
         patience=5, 
         random_seed=None,
         allow_diversity=True,
-        diversity_ratio=0.25,
+        diversity_ratio=0.75,
         dropna=True,
         pow_cross=True
     ):
@@ -78,15 +78,17 @@ class MSSP:
 
 
     def _on_epoch_end(self, mask, ep, pow_cross):
-        self.register({
+        msg = {
             'mask': mask.clone().cpu(),
             'epoch': ep,
             'coef': self.ols.coef_[mask, :].clone().cpu(),
             'intercept': self.ols.intercept_[mask].clone().cpu(),
             'i': self.ols.i[mask].clone().cpu(),
             'j': self.ols.j[mask].clone().cpu(),
-            'type': 'pow_cross_selection' if pow_cross else 'lin_cross_selection'
-        })
+            'type': 'pow_cross_selection' if pow_cross else 'lin_cross_selection',
+        }
+
+        self.register(msg)
 
 
     def _fit(self, X, y, X_valid, y_valid, ep, pow_cross=False):
@@ -168,11 +170,15 @@ class MSSP:
                 raise Exception("Negative values in the target, handle appropriate for pow cross method.")
             y_cross = torch.log(y)
 
-        X = self.data_manager.fit(X, y)
+        X, params = self.data_manager.fit(X, y)
+        self.register({
+            'type': 'primitives',
+            'epoch': -1,
+            'params': params
+        })
 
         best_loss, patience_counter = float('inf'), 0
         for ep in range(self.epochs):
-            print(X.shape)
             st = time.time()
 
             '''
@@ -227,7 +233,7 @@ class MSSP:
     def predict(self, X, top_k=1):
         self._build_model(top_k)
         X = self.data_manager.transform(X)
-
+        return self.model[0].predict(X)
 
     def _build_model(self, top_k):
         '''
@@ -256,4 +262,4 @@ class MSSP:
         If there are already multiple models built, only build required to get up to top_k, no need to rebuild models.
         '''
 
-        self.model.extend([Node.build_node(self.history, i) for i in range(lm, top_k)])
+        self.model.extend([ModelTree(self.history, i) for i in range(lm, top_k)])

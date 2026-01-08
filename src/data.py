@@ -48,7 +48,7 @@ class Primitives:
         return X, y
 
 
-    def transform(self, X, y, return_params: bool = False):
+    def transform(self, X, y):
         X, y = Primitives._validate_input(X, y)
 
         res = torch.zeros(X.shape[0], X.shape[1] * len(self.functions), dtype=torch.float)
@@ -57,13 +57,9 @@ class Primitives:
             for j, func in enumerate(self.functions):
                 tensor, coef, intercept = func(X[:, i], y)
                 res[:, i * len(self.functions) + j] = tensor
-                if return_params:
-                    params.append((coef, intercept))
+                params.append((coef, intercept, func.__name__, i))
 
-        if return_params:
-            return res, params
-
-        return res
+        return res, params
     
 
     '''
@@ -178,14 +174,13 @@ class DataManager:
 
     def fit(self, X, y):
         X = self.normalizer.fit(X)
-        X = self.primitives.transform(X, y)
+        X, params = self.primitives.transform(X, y)
         if X.isnan().any():
             raise Exception("NaNs in X")
-        return X
+        return X, params
 
-    def transform(self, X, y):
+    def transform(self, X):
         X = self.normalizer.transform(X)
-        X = self.primitives.transform(X, y)
         if X.isnan().any():
             raise Exception("NaNs in X")
         return X
