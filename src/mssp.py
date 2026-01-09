@@ -239,11 +239,17 @@ class MSSP:
 
     @ensure_x
     def predict(self, X, top_k=1, clip=None):
+        self._build_model(top_k)
         if clip is None:
             clip = self.pow_cross
-        self._build_model(top_k)
         X = self.data_manager.transform(X, apply_primitives=False, clip=clip)
-        return self.model[0].predict(X).flatten()
+
+        preds = []
+        for m in self.model[:top_k]:
+            p = m.predict(X)
+            preds.append(p.reshape(-1))
+
+        return torch.stack(preds, dim=0).mean(dim=0)
 
     def _build_model(self, top_k):
         '''
@@ -260,16 +266,8 @@ class MSSP:
         '''
         if (lm := len(self.model)) == top_k:
             return
-
-        '''
-        If more models than required, cut down to top_k.
-        '''
-        if lm > top_k:
-            self.model = self.model[:top_k]
-            return
         
         '''
         If there are already multiple models built, only build required to get up to top_k, no need to rebuild models.
         '''
-
         self.model.extend([ModelTree(self.history, i) for i in range(lm, top_k)])
