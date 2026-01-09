@@ -17,14 +17,16 @@ class Node:
 
     def _build_node(self, history, i):
         lin = [h for h in history if h['epoch'] == self.epoch and h['type'] == 'lin_cross_selection'][0]
-        pow = [h for h in history if h['epoch'] == self.epoch and h['type'] == 'pow_cross_selection'][0]
+        pow = [h for h in history if h['epoch'] == self.epoch and h['type'] == 'pow_cross_selection']
+        if pow:
+            pow = pow[0]
         best_i = [h for h in history if h['epoch'] == self.epoch and h['type'] == 'best_selection'][0]['mask'][i]
 
-        self.coef_ = torch.cat([lin['coef'], pow['coef']], dim=0)[best_i]
-        self.intercept_ = torch.cat([lin['intercept'], pow['intercept']], dim=0)[best_i]
+        self.coef_ = torch.cat([lin['coef'], pow['coef']], dim=0)[best_i] if pow else lin['coef'][best_i]
+        self.intercept_ = torch.cat([lin['intercept'], pow['intercept']], dim=0)[best_i] if pow else lin['intercept'][best_i]
 
-        self.i = torch.cat([lin['i'], pow['i']], dim=0)[best_i]
-        self.j = torch.cat([lin['j'], pow['j']], dim=0)[best_i]
+        self.i = torch.cat([lin['i'], pow['i']], dim=0)[best_i] if pow else lin['i'][best_i]
+        self.j = torch.cat([lin['j'], pow['j']], dim=0)[best_i] if pow else lin['j'][best_i]
 
         self.fn_in = (lambda x: x) if best_i < len(lin['mask']) else (lambda x: torch.log(x))
         self.fn_out = (lambda x: x) if best_i < len(lin['mask']) else (lambda x: torch.exp(x))
