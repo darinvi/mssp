@@ -194,12 +194,9 @@ class MSSP:
             '''
             scores, X, X_valid = scores_lin, X_lin, X_valid_lin
             if self.pow_cross:
-                # scores = torch.cat([scores_lin, scores_pow])
-                # X = torch.cat([X_lin, X_pow], dim=1)
-                # X_valid = torch.cat([X_valid_lin, X_valid_pow], dim=1)
-                scores = torch.cat([scores_pow, scores_lin])
-                X = torch.cat([X_pow, X_lin], dim=1)
-                X_valid = torch.cat([X_valid_pow, X_valid_lin], dim=1)
+                scores = torch.cat([scores_lin, scores_pow])
+                X = torch.cat([X_lin, X_pow], dim=1)
+                X_valid = torch.cat([X_valid_lin, X_valid_pow], dim=1)
                 
             X, X_valid = self._get_best_solutions(X, X_valid, scores, ep)
 
