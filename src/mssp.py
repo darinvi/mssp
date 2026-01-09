@@ -16,12 +16,17 @@ class MSSP:
         allow_diversity=True,
         diversity_ratio=0.75,
         dropna=True,
-        pow_cross=True
+        pow_cross=True,
+        cv=None
     ):
         if not isinstance(n_best, int) or n_best <= 0:
             raise ValueError(f"N best must be a positive integer, received {n_best} of type {type(n_best)}")
         self.n_best = n_best
         
+        if cv:
+            if not isinstance(cv, int):
+                raise Exception("CV should either be None or an int")
+
         if random_seed is not None:
             torch.manual_seed(random_seed)
             torch.cuda.manual_seed(random_seed)
@@ -34,6 +39,7 @@ class MSSP:
         self.dropna = dropna
         self.pow_cross = pow_cross
         self.built = False
+        self.cv = cv
 
     def _init_objects(self):
         self.data_manager = DataManager()
@@ -102,7 +108,11 @@ class MSSP:
 
         self._on_epoch_end(mask, ep, pow_cross)
 
-        return X, X_valid, scores[self.loss_fn][mask]
+        scores = scores[self.loss_fn]
+        if self.cv is None:
+            scores = scores[self.loss_fn][mask]
+
+        return X, X_valid, scores
 
 
     def _get_best_solutions(self, X, X_valid, scores, epoch):
@@ -144,13 +154,13 @@ class MSSP:
         return mask
 
 
-    def compute_scores(self, X, y, X_valid, y_valid, ep):
+    def compute_scores(self, X, X_valid, y, y_valid, y_cross, y_cross_valid, ep, only_return_scores=False):
         '''
         Fitting all pairwise and getting the n_best + a portion of random candidates for each method (lin, pow).
         '''
         X_lin, X_lin_valid, scores_lin = self._fit(X, y, X_valid=X_valid, y_valid=y_valid, ep=ep)
         if self.pow_cross:
-            X_pow, X_pow_valid, scores_pow = self._fit(X, y, X_valid=X_valid, y_valid=y_valid, ep=ep, pow_cross=True)
+            X_pow, X_pow_valid, scores_pow = self._fit(X, y_cross, X_valid=X_valid, y_valid=y_cross_valid, ep=ep, pow_cross=True)
 
 
         '''
@@ -159,9 +169,27 @@ class MSSP:
         scores, X, X_valid = scores_lin, X_lin, X_lin_valid
         if self.pow_cross:
             scores = torch.cat([scores_lin, scores_pow])
+
+            if only_return_scores: #used inside cv
+                return scores
+
             X = torch.cat([X_lin, X_pow], dim=1)
             if X_valid is not None:
                 X_valid = torch.cat([X_lin_valid, X_pow_valid], dim=1)
+        
+        return scores, X, X_valid
+    
+    
+    def _cv_folds(self, len_x):
+        indexes = torch.randperm(len_x)
+        folds = torch.linspace(0, len_x, steps=self.cv + 1, dtype=int)
+        for i, start in enumerate(folds[:-1], 1):
+            i_te = indexes[start: folds[i]]
+            mask = torch.ones(len_x, dtype=torch.bool)
+            mask[i_te] = False
+            i_tr = torch.nonzero(mask).flatten()
+            yield i_tr, i_te
+
 
     @ensure_y
     @ensure_x
@@ -191,17 +219,22 @@ class MSSP:
         for ep in range(self.epochs):
             st = time.time()
 
+            if self.cv:
+                scores = []
+                for i_tr, i_va in self._cv_folds(X.shape[0]):
+                    score = self.compute_scores(X[i_tr], X[i_va], y[i_tr], y[i_va], y_cross[i_tr], y_cross[i_va], ep, only_return_scores=True)
+                    scores.append(score)
+                scores = torch.stack(scores, dim=0).mean(dim=0)
+            else:
+                scores, X, X_valid = self.compute_scores(X, X_valid, y, y_valid, y_cross, y_cross_valid, ep)
 
-            
             X, X_valid = self._get_best_solutions(X, X_valid, scores, ep)
 
 
             '''
             Early stopping logic.
             '''
-            # 
-            scores = scores[~torch.isnan(scores)]
-            # 
+            scores = scores[~torch.isnan(scores)] # or normalize?
             loss_epoch = scores.min()
 
             print(f'loss ({self.loss_fn}): {loss_epoch.item():.4f}', "epoch:", ep, f", time: {time.time() - st:.2f}s")
