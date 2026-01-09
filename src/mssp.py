@@ -251,6 +251,13 @@ class MSSP:
 
         return torch.stack(preds, dim=0).mean(dim=0)
 
+
+    @ensure_x
+    def evaluate(self, X, y, top_k, clip=None):
+        y_pred = self.predict(X, top_k=top_k, clip=clip)
+        return ((y_pred - y)**2).mean()
+
+
     def _build_model(self, top_k):
         '''
         Validations
