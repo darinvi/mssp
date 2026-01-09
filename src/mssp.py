@@ -74,8 +74,10 @@ class MSSP:
     def _fit(self, X, y, X_valid, y_valid, ep, pow_cross=False):
         if pow_cross:
             X = torch.log(X)
+            y = torch.log(y)
             if X_valid is not None:
                 X_valid = torch.log(X_valid)
+                y_valid = torch.log(y_valid)
 
         self.ols.fit(X, y)
         
@@ -142,6 +144,25 @@ class MSSP:
         return mask
 
 
+    def compute_scores(self, X, y, X_valid, y_valid, ep):
+        '''
+        Fitting all pairwise and getting the n_best + a portion of random candidates for each method (lin, pow).
+        '''
+        X_lin, X_lin_valid, scores_lin = self._fit(X, y, X_valid=X_valid, y_valid=y_valid, ep=ep)
+        if self.pow_cross:
+            X_pow, X_pow_valid, scores_pow = self._fit(X, y, X_valid=X_valid, y_valid=y_valid, ep=ep, pow_cross=True)
+
+
+        '''
+        Getting n_best + a portion of random candidates from the overall population.
+        '''
+        scores, X, X_valid = scores_lin, X_lin, X_lin_valid
+        if self.pow_cross:
+            scores = torch.cat([scores_lin, scores_pow])
+            X = torch.cat([X_lin, X_pow], dim=1)
+            if X_valid is not None:
+                X_valid = torch.cat([X_lin_valid, X_pow_valid], dim=1)
+
     @ensure_y
     @ensure_x
     def fit(self, X, y, X_valid=None, y_valid=None):
@@ -158,7 +179,7 @@ class MSSP:
             if y.min() <= 0:
                 raise Exception("Negative values in the target, handle appropriate for pow cross method.")
             y_cross = torch.log(y)
-            y_valid_cross = torch.log(y_valid) if y_valid is not None else y_cross
+            y_cross_valid = torch.log(y_valid) if y_valid is not None else y_cross
 
         self.register({
             'type': 'primitives',
@@ -170,24 +191,8 @@ class MSSP:
         for ep in range(self.epochs):
             st = time.time()
 
-            '''
-            Fitting all pairwise and getting the n_best + a portion of random candidates for each method (lin, pow).
-            '''
-            X_lin, X_valid_lin, scores_lin = self._fit(X, y, X_valid=X_valid, y_valid=y_valid, ep=ep)
-            if self.pow_cross:
-                X_pow, X_valid_pow, scores_pow = self._fit(X, y_cross, X_valid=X_valid, y_valid=y_valid_cross, ep=ep, pow_cross=True)
 
-
-            '''
-            Getting n_best + a portion of random candidates from the overall population.
-            '''
-            scores, X, X_valid = scores_lin, X_lin, X_valid_lin
-            if self.pow_cross:
-                scores = torch.cat([scores_lin, scores_pow])
-                X = torch.cat([X_lin, X_pow], dim=1)
-                if X_valid is not None:
-                    X_valid = torch.cat([X_valid_lin, X_valid_pow], dim=1)
-                    
+            
             X, X_valid = self._get_best_solutions(X, X_valid, scores, ep)
 
 
