@@ -2,17 +2,50 @@ from src.ols import LinearRegression
 import torch
 
 
+
+class DataManager:
+    def __init__(self, return_params=False):
+        self.normalizer = Normalizer()
+        self.primitives = Primitives()
+
+    def fit(self, X, y):
+        X = self.normalizer.fit(X)
+        X, params = self.primitives.fit(X, y)
+        if X.isnan().any():
+            raise Exception("NaNs in X")
+        return X, params
+
+    def transform(self, X, apply_primitives=True, clip=False):
+        X = self.normalizer.transform(X, clip)
+        if apply_primitives:
+            X = self.primitives.transform(X)
+        if X.isnan().any():
+            raise Exception("NaNs in X")
+        return X
+
 class Normalizer:
     def __init__(self, eps=1e-6, out_range=None):
         self.eps = eps
         self.out_range = out_range or (eps, 1 - eps)
 
     def fit(self, X):
+        if hasattr(self, 'fitted'):
+            raise Exception("Already fitted")
         self.min = X.min(dim=0)[0]
         self.max = X.max(dim=0)[0]
+        self.fitted = True
         return self.transform(X)
 
-    def transform(self, X):
+    def transform(self, X, clip=False):
+        if not hasattr(self, 'fitted') or not self.fitted:
+            raise Exception("Normalizer should be fitted before applying transformations.")
+        
+        '''
+        If incoming data is outside of the training range, outcomes might be unpredictable combined with logarithms.
+        '''
+        if clip:
+            X = torch.clamp(X, min=self.min, max=self.max)
+
         low, high = self.out_range
         return (X - self.min) / (self.max - self.min + self.eps) * (high - low) + low
 
@@ -23,15 +56,19 @@ class Normalizer:
 
 class Primitives:
     def __init__(self, apply_correction: bool = True):
+        _lin = lambda x: x
+        _log = lambda x: torch.log(x)
+        _exp = lambda x: torch.exp(x)
+        _rec = lambda x: 1/x
         self.functions = [
-            self.lin,
-            self.lgn,
-            self.xpy,
-            self.pow,
-            self.rex,
-            self.rey,
-            self.sqr,
-            self.snx,
+            (self.lin, _lin, _lin),
+            (self.lgn, _log, _lin),
+            (self.xpy, _lin, _exp),
+            (self.pow, _log, _exp),
+            (self.rex, _rec, _lin),
+            (self.rey, _lin, _rec),
+            (self.sqr, _lin, lambda x: x**2),
+            (self.snx, lambda x: torch.sin(x), _lin),
         ]
 
 
@@ -47,17 +84,30 @@ class Primitives:
             raise ValueError(f"X must be a 1D or 2D tensor, received {X.ndim}D")
         return X, y
 
+    def transform(self, X):
+        res = torch.zeros(X.shape[0], X.shape[1] * len(self.functions), dtype=torch.float)
+        for i, models in enumerate(self.models):
+            for j, (m, fn_in, fn_out) in enumerate(models):
+                y = m.predict(fn_in(X[:, i]))
+                res[:, i * len(self.functions) + j] = fn_out(y)
+        return res
 
-    def transform(self, X, y):
+    def fit(self, X, y):
         X, y = Primitives._validate_input(X, y)
 
         res = torch.zeros(X.shape[0], X.shape[1] * len(self.functions), dtype=torch.float)
         params = []
+        models = []
         for i in range(X.shape[1]):
-            for j, func in enumerate(self.functions):
-                tensor, coef, intercept = func(X[:, i], y)
+            feature_models = []
+            for j, (func, fn_in, fn_out) in enumerate(self.functions):
+                tensor, coef, intercept, model = func(X[:, i], y)
                 res[:, i * len(self.functions) + j] = tensor
                 params.append((coef, intercept, func.__name__, i))
+                feature_models.append((model, fn_in, fn_out))
+            models.append(feature_models)
+
+        self.models = models
 
         return res, params
     
@@ -68,7 +118,7 @@ class Primitives:
     def lin(self, x, y):
         model = LinearRegression()
         p = model.fit_predict(x, y)
-        return p, model.coef_, model.intercept_
+        return p, model.coef_, model.intercept_, model
 
 
     '''
@@ -82,7 +132,7 @@ class Primitives:
             torch.log(x),
             y
         )
-        return p, model.coef_, model.intercept_
+        return p, model.coef_, model.intercept_, model
 
 
     '''
@@ -96,7 +146,7 @@ class Primitives:
             x, 
             torch.log(y)
         )
-        return torch.exp(p), model.coef_, model.intercept_
+        return torch.exp(p), model.coef_, model.intercept_, model
 
     '''
     Y = a0 * X^a1
@@ -109,7 +159,7 @@ class Primitives:
             torch.log(x), 
             torch.log(y)
         )
-        return torch.exp(p), model.coef_, model.intercept_
+        return torch.exp(p), model.coef_, model.intercept_, model
 
 
     '''
@@ -123,7 +173,7 @@ class Primitives:
             1/x,
             y
         )
-        return p, model.coef_, model.intercept_
+        return p, model.coef_, model.intercept_, model
 
 
     '''
@@ -137,7 +187,7 @@ class Primitives:
             x, 
             1/y
         )
-        return 1/p, model.coef_, model.intercept_
+        return 1/p, model.coef_, model.intercept_, model
 
 
     '''
@@ -151,7 +201,7 @@ class Primitives:
             x, 
             torch.sqrt(y)
         )
-        return p ** 2, model.coef_, model.intercept_
+        return p ** 2, model.coef_, model.intercept_, model
 
 
     '''
@@ -165,22 +215,5 @@ class Primitives:
             torch.sin(x),
             y
         )
-        return p, model.coef_, model.intercept_
+        return p, model.coef_, model.intercept_, model
 
-class DataManager:
-    def __init__(self, return_params=False):
-        self.normalizer = Normalizer()
-        self.primitives = Primitives()
-
-    def fit(self, X, y):
-        X = self.normalizer.fit(X)
-        X, params = self.primitives.transform(X, y)
-        if X.isnan().any():
-            raise Exception("NaNs in X")
-        return X, params
-
-    def transform(self, X):
-        X = self.normalizer.transform(X)
-        if X.isnan().any():
-            raise Exception("NaNs in X")
-        return X

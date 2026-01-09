@@ -43,29 +43,9 @@ class MSSP:
         self.model = []
 
 
-    @staticmethod
-    def _validate_X_y_valid(X_valid, y_valid):
-        if X_valid is None and y_valid is None:
-            return None, None
-        
-        if not all(val is not None for val in [X_valid, y_valid]):
-            raise ValueError("X_valid and y_valid must be provided together")
-        
-        if not isinstance(X_valid, torch.Tensor):
-            X_valid = torch.as_tensor(X_valid, dtype=torch.float)
-
-        if not isinstance(y_valid, torch.Tensor):
-            y_valid = torch.as_tensor(y_valid, dtype=torch.float)
-
-        if X_valid.ndim != 2:
-            raise ValueError(f"X_valid must be a 2D tensor, received {X_valid.ndim}D")
-
-        # TODO also tranform X_valid, y_valid
-
-        return X_valid, y_valid
-
     def register(self, data):
         self.history.append(data)
+
 
     def _normalize(self, X, X_valid=None):
         if X_valid is None:
@@ -93,24 +73,30 @@ class MSSP:
 
     def _fit(self, X, y, X_valid, y_valid, ep, pow_cross=False):
         if pow_cross:
-            # X, X_valid = self._normalize(X, X_valid)
             X = torch.log(X)
-            X_valid = torch.log(X_valid)
+            if X_valid is not None:
+                X_valid = torch.log(X_valid)
 
         self.ols.fit(X, y)
-        scores = self.ols.evaluate(X_valid, y_valid, pow_cross=pow_cross)
+        
+        if X_valid is not None: 
+            scores = self.ols.evaluate(X_valid, y_valid, pow_cross=pow_cross)
+        else:
+            scores = self.ols.evaluate(X, y, pow_cross=pow_cross)
+
         mask = self._get_index_mask(scores[self.loss_fn])
 
         X = self.ols.predict(X)
         X = X[:, mask]
 
-        X_valid = self.ols.predict(X_valid)
-        X_valid = X_valid[:, mask]
+        if X_valid is not None:
+            X_valid = self.ols.predict(X_valid)
+            X_valid = X_valid[:, mask]
 
         if pow_cross:
-            # X, X_valid = self._normalize(X, X_valid)
             X = torch.exp(X)
-            X_valid = torch.exp(X_valid)
+            if X_valid is not None:
+                X_valid = torch.exp(X_valid)
 
         self._on_epoch_end(mask, ep, pow_cross)
 
@@ -124,7 +110,9 @@ class MSSP:
             'epoch': epoch,
             'type': 'best_selection',
         })
-        return X[:, mask], X_valid[:, mask]
+        if X_valid is not None:
+            X_valid = X_valid[:, mask]
+        return X[:, mask], X_valid
 
 
     def _get_index_mask(self, scores):
@@ -162,15 +150,16 @@ class MSSP:
         '''
         self._init_objects()
 
-        # X_valid, y_valid = MSSP._validate_X_y_valid(X_valid, y_valid)
+        X, params = self.data_manager.fit(X, y)
+
+        X_valid, y_valid = self._validate_X_y_valid(X_valid, y_valid)
         
         if self.pow_cross:
-            # TODO add y_valid
             if y.min() <= 0:
                 raise Exception("Negative values in the target, handle appropriate for pow cross method.")
             y_cross = torch.log(y)
+            y_valid_cross = torch.log(y_valid) if y_valid is not None else y_cross
 
-        X, params = self.data_manager.fit(X, y)
         self.register({
             'type': 'primitives',
             'epoch': -1,
@@ -184,9 +173,9 @@ class MSSP:
             '''
             Fitting all pairwise and getting the n_best + a portion of random candidates for each method (lin, pow).
             '''
-            X_lin, X_valid_lin, scores_lin = self._fit(X, y, X_valid=X, y_valid=y, ep=ep)
+            X_lin, X_valid_lin, scores_lin = self._fit(X, y, X_valid=X_valid, y_valid=y_valid, ep=ep)
             if self.pow_cross:
-                X_pow, X_valid_pow, scores_pow = self._fit(X, y_cross, X_valid=X, y_valid=y, ep=ep, pow_cross=True)
+                X_pow, X_valid_pow, scores_pow = self._fit(X, y_cross, X_valid=X_valid, y_valid=y_valid_cross, ep=ep, pow_cross=True)
 
 
             '''
@@ -196,8 +185,9 @@ class MSSP:
             if self.pow_cross:
                 scores = torch.cat([scores_lin, scores_pow])
                 X = torch.cat([X_lin, X_pow], dim=1)
-                X_valid = torch.cat([X_valid_lin, X_valid_pow], dim=1)
-                
+                if X_valid is not None:
+                    X_valid = torch.cat([X_valid_lin, X_valid_pow], dim=1)
+                    
             X, X_valid = self._get_best_solutions(X, X_valid, scores, ep)
 
 
@@ -226,11 +216,34 @@ class MSSP:
         print(f"Best loss: {best_loss} after training for {ep} epochs")
 
 
+    def _validate_X_y_valid(self, X_valid, y_valid):
+        if X_valid is None and y_valid is None:
+            return None, None
+        
+        if not all(val is not None for val in [X_valid, y_valid]):
+            raise ValueError("X_valid and y_valid must be provided together")
+        
+        if not isinstance(X_valid, torch.Tensor):
+            X_valid = torch.as_tensor(X_valid, dtype=torch.float)
+
+        if not isinstance(y_valid, torch.Tensor):
+            y_valid = torch.as_tensor(y_valid, dtype=torch.float)
+
+        if X_valid.ndim != 2:
+            raise ValueError(f"X_valid must be a 2D tensor, received {X_valid.ndim}D")
+
+        X_valid = self.data_manager.transform(X_valid)
+
+        return X_valid, y_valid
+
+
     @ensure_x
-    def predict(self, X, top_k=1):
+    def predict(self, X, top_k=1, clip=None):
+        if clip is None:
+            clip = self.pow_cross
         self._build_model(top_k)
-        X = self.data_manager.transform(X)
-        return self.model[0].predict(X)
+        X = self.data_manager.transform(X, apply_primitives=False, clip=clip)
+        return self.model[0].predict(X).flatten()
 
     def _build_model(self, top_k):
         '''
