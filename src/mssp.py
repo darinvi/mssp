@@ -77,7 +77,7 @@ class MSSP:
         self.register(msg)
 
 
-    def _fit(self, X, y, X_valid, y_valid, ep, pow_cross=False):
+    def _fit(self, X, y, X_valid, y_valid, ep, pow_cross=False, return_all_scores=False, mask=None):
         if pow_cross:
             X = torch.log(X)
             y = torch.log(y)
@@ -92,7 +92,8 @@ class MSSP:
         else:
             scores = self.ols.evaluate(X, y, pow_cross=pow_cross)
 
-        mask = self._get_index_mask(scores[self.loss_fn])
+        if mask is None:
+            mask = self._get_index_mask(scores[self.loss_fn])
 
         X = self.ols.predict(X)
         X = X[:, mask]
@@ -105,12 +106,12 @@ class MSSP:
             X = torch.exp(X)
             if X_valid is not None:
                 X_valid = torch.exp(X_valid)
-
-        self._on_epoch_end(mask, ep, pow_cross)
-
+        
         scores = scores[self.loss_fn]
-        if self.cv is None:
-            scores = scores[self.loss_fn][mask]
+
+        if not return_all_scores:
+            self._on_epoch_end(mask, ep, pow_cross)
+            scores = scores[mask]
 
         return X, X_valid, scores
 
@@ -154,13 +155,13 @@ class MSSP:
         return mask
 
 
-    def compute_scores(self, X, X_valid, y, y_valid, y_cross, y_cross_valid, ep, only_return_scores=False):
+    def compute_scores(self, X, X_valid, y, y_valid, y_cross, y_cross_valid, ep, only_return_scores=False, mask=(None, None)):
         '''
         Fitting all pairwise and getting the n_best + a portion of random candidates for each method (lin, pow).
         '''
-        X_lin, X_lin_valid, scores_lin = self._fit(X, y, X_valid=X_valid, y_valid=y_valid, ep=ep)
+        X_lin, X_lin_valid, scores_lin = self._fit(X, y, X_valid=X_valid, y_valid=y_valid, ep=ep, return_all_scores=only_return_scores, mask=mask[0])
         if self.pow_cross:
-            X_pow, X_pow_valid, scores_pow = self._fit(X, y_cross, X_valid=X_valid, y_valid=y_cross_valid, ep=ep, pow_cross=True)
+            X_pow, X_pow_valid, scores_pow = self._fit(X, y_cross, X_valid=X_valid, y_valid=y_cross_valid, ep=ep, pow_cross=True, return_all_scores=only_return_scores, mask=mask[1])
 
 
         '''
@@ -189,6 +190,24 @@ class MSSP:
             mask[i_te] = False
             i_tr = torch.nonzero(mask).flatten()
             yield i_tr, i_te
+
+
+    def _get_cv_scores(self, X, y, y_cross, ep):
+        scores = []
+        for i_tr, i_va in self._cv_folds(X.shape[0]):
+            score = self.compute_scores(X[i_tr], X[i_va], y[i_tr], y[i_va], y_cross[i_tr], y_cross[i_va], ep, only_return_scores=True)
+            scores.append(score)
+        return torch.stack(scores, dim=0).mean(dim=0)
+
+
+    def _get_cv_masks(self, scores):
+        if self.pow_cross:
+            s_lin, s_pow = scores[:scores.shape[0] //2], scores[scores.shape[0] //2:]
+            mask_lin = self._get_index_mask(s_lin.clone().cpu())
+            mask_pow = self._get_index_mask(s_pow.clone().cpu())
+            return mask_lin, mask_pow, torch.cat([s_lin[mask_lin], s_pow[mask_pow]])
+        mask_lin = self._get_index_mask(scores.clone().cpu())
+        return mask_lin, None, scores[mask_lin]
 
 
     @ensure_y
@@ -220,11 +239,9 @@ class MSSP:
             st = time.time()
 
             if self.cv:
-                scores = []
-                for i_tr, i_va in self._cv_folds(X.shape[0]):
-                    score = self.compute_scores(X[i_tr], X[i_va], y[i_tr], y[i_va], y_cross[i_tr], y_cross[i_va], ep, only_return_scores=True)
-                    scores.append(score)
-                scores = torch.stack(scores, dim=0).mean(dim=0)
+                scores = self._get_cv_scores(X, y, y_cross, ep)
+                mask_lin, mask_pow, scores = self._get_cv_masks(scores)
+                _, X, X_valid = self.compute_scores(X, X_valid, y, y_valid, y_cross, y_cross_valid, ep, mask=(mask_lin, mask_pow))
             else:
                 scores, X, X_valid = self.compute_scores(X, X_valid, y, y_valid, y_cross, y_cross_valid, ep)
 
@@ -258,6 +275,9 @@ class MSSP:
         if X_valid is None and y_valid is None:
             return None, None
         
+        if self.cv:
+            raise Exception("When validation data is provided, cv should be set to False")
+
         if not all(val is not None for val in [X_valid, y_valid]):
             raise ValueError("X_valid and y_valid must be provided together")
         
@@ -291,7 +311,7 @@ class MSSP:
 
 
     @ensure_x
-    def evaluate(self, X, y, top_k, clip=None):
+    def evaluate(self, X, y, top_k=1, clip=None):
         y_pred = self.predict(X, top_k=top_k, clip=clip)
         return ((y_pred - y)**2).mean()
 
