@@ -1,10 +1,11 @@
 from src.data import DataManager
 from src.ols import PairwiseLinearRegression, ensure_x, ensure_y
 from src.tree import ModelTree
+from src.plot import MSSPPlot
 import torch
 import time
 
-class MSSP:
+class MSSP(MSSPPlot):
     def __init__(
         self, 
         n_best=100, 
@@ -77,20 +78,22 @@ class MSSP:
         self.register(msg)
 
 
-    def _fit(self, X, y, X_valid, y_valid, ep, pow_cross=False, return_all_scores=False, mask=None):
+    def _fit(self, X, y, X_valid, y_valid, ep, pow_cross=False, is_cv_fold=False, mask=None):
         if pow_cross:
             X = torch.log(X)
-            y = torch.log(y)
             if X_valid is not None:
                 X_valid = torch.log(X_valid)
+            if is_cv_fold:
+                y = torch.log(y)
                 y_valid = torch.log(y_valid)
-
+        
         self.ols.fit(X, y)
         
         if X_valid is not None: 
             scores = self.ols.evaluate(X_valid, y_valid, pow_cross=pow_cross)
         else:
             scores = self.ols.evaluate(X, y, pow_cross=pow_cross)
+
 
         if mask is None:
             mask = self._get_index_mask(scores[self.loss_fn])
@@ -109,7 +112,7 @@ class MSSP:
         
         scores = scores[self.loss_fn]
 
-        if not return_all_scores:
+        if not is_cv_fold:
             self._on_epoch_end(mask, ep, pow_cross)
             scores = scores[mask]
 
@@ -155,13 +158,13 @@ class MSSP:
         return mask
 
 
-    def compute_scores(self, X, X_valid, y, y_valid, y_cross, y_cross_valid, ep, only_return_scores=False, mask=(None, None)):
+    def compute_scores(self, X, X_valid, y, y_valid, y_cross, y_cross_valid, ep, is_cv_fold=False, mask=(None, None)):
         '''
         Fitting all pairwise and getting the n_best + a portion of random candidates for each method (lin, pow).
         '''
-        X_lin, X_lin_valid, scores_lin = self._fit(X, y, X_valid=X_valid, y_valid=y_valid, ep=ep, return_all_scores=only_return_scores, mask=mask[0])
+        X_lin, X_lin_valid, scores_lin = self._fit(X, y, X_valid=X_valid, y_valid=y_valid, ep=ep, is_cv_fold=is_cv_fold, mask=mask[0])
         if self.pow_cross:
-            X_pow, X_pow_valid, scores_pow = self._fit(X, y_cross, X_valid=X_valid, y_valid=y_cross_valid, ep=ep, pow_cross=True, return_all_scores=only_return_scores, mask=mask[1])
+            X_pow, X_pow_valid, scores_pow = self._fit(X, y_cross, X_valid=X_valid, y_valid=y_cross_valid, ep=ep, pow_cross=True, is_cv_fold=is_cv_fold, mask=mask[1])
 
 
         '''
@@ -171,7 +174,7 @@ class MSSP:
         if self.pow_cross:
             scores = torch.cat([scores_lin, scores_pow])
 
-            if only_return_scores: #used inside cv
+            if is_cv_fold: #used inside cv
                 return scores
 
             X = torch.cat([X_lin, X_pow], dim=1)
@@ -195,7 +198,7 @@ class MSSP:
     def _get_cv_scores(self, X, y, y_cross, ep):
         scores = []
         for i_tr, i_va in self._cv_folds(X.shape[0]):
-            score = self.compute_scores(X[i_tr], X[i_va], y[i_tr], y[i_va], y_cross[i_tr], y_cross[i_va], ep, only_return_scores=True)
+            score = self.compute_scores(X[i_tr], X[i_va], y[i_tr], y[i_va], y_cross[i_tr], y_cross[i_va], ep, is_cv_fold=True)
             scores.append(score)
         return torch.stack(scores, dim=0).mean(dim=0)
 
@@ -222,6 +225,7 @@ class MSSP:
 
         X_valid, y_valid = self._validate_X_y_valid(X_valid, y_valid)
         
+        y_cross, y_cross_valid = None, None
         if self.pow_cross:
             if y.min() <= 0:
                 raise Exception("Negative values in the target, handle appropriate for pow cross method.")
@@ -313,7 +317,8 @@ class MSSP:
     @ensure_x
     def evaluate(self, X, y, top_k=1, clip=None):
         y_pred = self.predict(X, top_k=top_k, clip=clip)
-        return ((y_pred - y)**2).mean()
+        mse = ((y_pred - y)**2)
+        return mse.mean(), mse.std() / mse.mean()
 
 
     def _build_model(self, top_k):

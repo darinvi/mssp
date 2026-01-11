@@ -9,8 +9,8 @@ class DataManager:
         self.primitives = Primitives()
 
     def fit(self, X, y):
-        X = self.normalizer.fit(X)
-        X, params = self.primitives.fit(X, y)
+        X = self.normalizer.fit_transform(X)
+        X, params = self.primitives.fit_transform(X, y)
         if X.isnan().any():
             raise Exception("NaNs in X")
         return X, params
@@ -34,6 +34,9 @@ class Normalizer:
         self.min = X.min(dim=0)[0]
         self.max = X.max(dim=0)[0]
         self.fitted = True
+    
+    def fit_transform(self, X):
+        self.fit(X)
         return self.transform(X)
 
     def transform(self, X, clip=False):
@@ -92,7 +95,7 @@ class Primitives:
                 res[:, i * len(self.functions) + j] = fn_out(y)
         return res
 
-    def fit(self, X, y):
+    def fit_transform(self, X, y):
         X, y = Primitives._validate_input(X, y)
 
         res = torch.zeros(X.shape[0], X.shape[1] * len(self.functions), dtype=torch.float)

@@ -28,8 +28,10 @@ class Node:
         self.i = torch.cat([lin['i'], pow['i']], dim=0)[best_i] if pow else lin['i'][best_i]
         self.j = torch.cat([lin['j'], pow['j']], dim=0)[best_i] if pow else lin['j'][best_i]
 
-        self.fn_in = (lambda x: x) if best_i < len(lin['mask']) else (lambda x: torch.log(x))
-        self.fn_out = (lambda x: x) if best_i < len(lin['mask']) else (lambda x: torch.exp(x))
+        self.cross = 'lin' if best_i < len(lin['mask']) else 'pow'
+        self.fn_in = (lambda x: x) if self.cross == 'lin' else (lambda x: torch.log(x))
+        self.fn_out = (lambda x: x) if self.cross == 'lin' else (lambda x: torch.exp(x))
+
 
         self.left_child = Node(self.epoch - 1, history, self.i) if self.epoch > 0 else PrimitiveNode(history, self.i)
         self.right_child = Node(self.epoch - 1, history, self.j) if self.epoch > 0 else PrimitiveNode(history, self.j)
