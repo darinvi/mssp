@@ -13,6 +13,7 @@ class ModelTree:
 class Node:
     def __init__(self, epoch, history, i):
         self.epoch = epoch
+        self.pos = i
         self._build_node(history, i)
 
     def _build_node(self, history, i):
@@ -31,7 +32,6 @@ class Node:
         self.cross = 'lin' if best_i < len(lin['mask']) else 'pow'
         self.fn_in = (lambda x: x) if self.cross == 'lin' else (lambda x: torch.log(x))
         self.fn_out = (lambda x: x) if self.cross == 'lin' else (lambda x: torch.exp(x))
-
 
         self.left_child = Node(self.epoch - 1, history, self.i) if self.epoch > 0 else PrimitiveNode(history, self.i)
         self.right_child = Node(self.epoch - 1, history, self.j) if self.epoch > 0 else PrimitiveNode(history, self.j)
