@@ -1,6 +1,6 @@
 from src.data import DataManager
 from src.ols import PairwiseLinearRegression, ensure_x, ensure_y
-from src.tree import ModelTree
+from src.graph import ModelGraph
 from src.plot import MSSPPlot
 import torch
 import time
@@ -94,10 +94,12 @@ class MSSP(MSSPPlot):
         else:
             scores = self.ols.evaluate(X, y, pow_cross=pow_cross)
 
-
         if mask is None:
             mask = self._get_index_mask(scores[self.loss_fn])
 
+        '''
+        Mask is an integer mask. After prediction, only get the relevant columns.
+        '''
         X = self.ols.predict(X)
         X = X[:, mask]
 
@@ -112,6 +114,11 @@ class MSSP(MSSPPlot):
         
         scores = scores[self.loss_fn]
 
+
+
+        '''
+        If is a cv fold, all the scores are required + no _on_epoch_end
+        '''
         if not is_cv_fold:
             self._on_epoch_end(mask, ep, pow_cross)
             scores = scores[mask]
@@ -149,6 +156,7 @@ class MSSP(MSSPPlot):
 
         '''
         Mask the n_best for next generation. Introduce some randomness.
+        Mask is an integer mask indicating the index of the element (it's not boolean)
         '''
         mask = indexes[:int(self.n_best * (1 - self.diversity_ratio))]
         indexes = indexes[int(self.n_best * (1 - self.diversity_ratio)):]
@@ -222,21 +230,23 @@ class MSSP(MSSPPlot):
         self._init_objects()
 
         X, params = self.data_manager.fit(X, y)
+        
+        self.register({
+            'type': 'primitives',
+            'epoch': -1,
+            'params': params
+        })
 
         X_valid, y_valid = self._validate_X_y_valid(X_valid, y_valid)
         
         y_cross, y_cross_valid = None, None
         if self.pow_cross:
             if y.min() <= 0:
+                # TODO normalize y in data manager aswell, when predicting apply inverse transform to return in original dimension
                 raise Exception("Negative values in the target, handle appropriate for pow cross method.")
             y_cross = torch.log(y)
             y_cross_valid = torch.log(y_valid) if y_valid is not None else y_cross
 
-        self.register({
-            'type': 'primitives',
-            'epoch': -1,
-            'params': params
-        })
 
         best_loss, patience_counter = float('inf'), 0
         for ep in range(self.epochs):
@@ -340,4 +350,4 @@ class MSSP(MSSPPlot):
         '''
         If there are already multiple models built, only build required to get up to top_k, no need to rebuild models.
         '''
-        self.model.extend([ModelTree(self.history, i) for i in range(lm, top_k)])
+        self.model.extend([ModelGraph(self.history, i) for i in range(lm, top_k)])

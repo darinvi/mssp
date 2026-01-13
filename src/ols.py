@@ -96,7 +96,8 @@ class PairwiseLinearRegression:
         start = 0
         element_size = X.element_size()
         while start < n:
-            batch_size = self._calculate_batch_size(element_size=element_size, dim=p) # TODO make sure formula is correct
+            # FIXME if no gpu -> no need to move to device, its already on ram. Use a view to the slice or something.
+            batch_size = self._calculate_batch_size(element_size=element_size, dim=p)
             Xb = X[start:start + batch_size].cuda(self.device, non_blocking=True)
             yb = y[start:start + batch_size].cuda(self.device, non_blocking=True)
 

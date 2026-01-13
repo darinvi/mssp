@@ -2,7 +2,6 @@ from src.ols import LinearRegression
 import torch
 
 
-
 class DataManager:
     def __init__(self, return_params=False):
         self.normalizer = Normalizer()
