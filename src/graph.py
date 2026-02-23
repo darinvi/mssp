@@ -3,6 +3,7 @@ import torch
 
 class ModelGraph:
     def __init__(self, history, i):
+        # FIXME if early stopping - the best epoch shouldn't be the last one (due to patience)
         max_ep = max([h['epoch'] for h in history])
         self.nodes = {}
         self.head = Node(max_ep, history, i, self)

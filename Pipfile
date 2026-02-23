@@ -13,6 +13,8 @@ numpy = "*"
 scikit-learn = "*"
 matplotlib = "*"
 torch = {version = "*", index = "downloadpytorch"}
+pandas = "*"
+networkx = "*"
 
 [dev-packages]
 ipykernel = "*"

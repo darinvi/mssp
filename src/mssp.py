@@ -10,7 +10,7 @@ class MSSP(MSSPPlot):
         self, 
         n_best=100, 
         epochs=10, 
-        loss_fn="mape", 
+        loss_fn="mse", 
         early_stopping=True, 
         patience=5, 
         random_seed=None,
@@ -268,7 +268,8 @@ class MSSP(MSSPPlot):
             scores = scores[~torch.isnan(scores)] # or normalize?
             loss_epoch = scores.min()
 
-            print(f'loss ({self.loss_fn}): {loss_epoch.item():.4f}', "epoch:", ep, f", time: {time.time() - st:.2f}s")
+            # print(f'loss ({self.loss_fn}): {loss_epoch.item():.4f}', "epoch:", ep, f", time: {time.time() - st:.2f}s")
+            print(f'loss ({self.loss_fn}): {loss_epoch.item()}', "epoch:", ep, f", time: {time.time() - st:.2f}s")
 
             if not self.early_stopping:
                 best_loss = min(best_loss, loss_epoch)
